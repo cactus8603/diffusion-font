@@ -34,7 +34,6 @@ class ImgDataSet(Dataset):
         font_num = int(list(self.font_class_dict.keys())[list(self.font_class_dict.values()).index(label)])
         label_tensor[font_num] = 1.
 
-
         return img_tensor, label_tensor
     
     def __len__(self):

@@ -12,7 +12,19 @@ import pathlib
 
 from timm.models.efficientformer_v2 import _cfg, efficientformerv2_s0
 
-from dataset import ImgDataSet
+import os
+import random
+import torch
+import numpy as np
+import torch.nn.functional as F
+from tqdm import tqdm
+from glob import glob
+from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
+from torch.cuda.amp import autocast as autocast
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+
+from .dataset import ImgDataSet
 
 def read_spilt_data(args):
 
@@ -68,6 +80,53 @@ def load_model(args):
     print("load model successful")
 
     return model
+
+def train_one_epoch(model, optimizer, data_loader, device, epoch, scaler, args_dict):
+    model.train()
+    loss_function = torch.nn.CrossEntropyLoss()
+
+    accu_loss = torch.zeros(1).to(device)
+    avg_loss = torch.zeros(1).to(device)
+    accu_num = torch.zeros(1).to(device)
+
+    optimizer.zero_grad()
+
+    sample_num = 0
+    data_loader = tqdm(data_loader)
+
+    for i, (img, label) in enumerate(data_loader):
+        img, label = img.to(device), label.to(device)
+        # print(img.shape)
+        # print(label.argmax(1))
+        # print(label.shape)
+        # break
+        sample_num += img.shape[0]
+
+        with autocast():
+            pred = model(img)
+            loss = loss_function(pred, label)
+
+        accu_loss += loss.detach()
+        loss /= args_dict['accumulation_step']
+        scaler.scale(loss).backward()
+
+        p = F.softmax(pred, dim=1)
+        accu_num += (p.argmax(1) == label.argmax(1)).type(torch.float).sum().item()
+
+        # pred_class = torch.max(pred, dim=1)[1]
+        # accu_num += torch.eq(pred_class, label).sum()
+
+        if (((i+1) % args_dict['accumulation_step'] == 0) or (i+1 == len(data_loader))):
+            scaler.step(optimizer)
+            scaler.update()
+            # optimizer.step()
+            optimizer.zero_grad()
+
+        # print(accu_loss.item(), loss.detach(), loss.item())     
+        data_loader.desc = "epoch:{},gpu:{},loss:{:.5f},acc:{:.5f}".format(epoch, device, accu_loss.item()/(i+1), accu_num.item() / sample_num)
+        # break
+
+    return (accu_loss.item() / (i+1)), (accu_num.item() / sample_num)
 
 @torch.no_grad()
 def evaluate(model, data_loader):
