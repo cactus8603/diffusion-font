@@ -33,6 +33,9 @@ def create_parser():
     parser.add_argument("--lr", default=0.01, type=float, help='learning rate')
     parser.add_argument("--epoch", default=200, type=int, help='total epoch')
     parser.add_argument("--n_classes", default=173, type=int, help='total classes')
+    parser.add_argument("--n_steps", default=100, type=int, help='')
+    parser.add_argument("--n_samples", default=16, type=, help='Number of samples to generate')
+    parser.add_argument("--accumulation_step", default=4, type=int, help='')
 
     # save and load data path
     parser.add_argument("--model_save_path", default='./result', type=str, help='path to save model')

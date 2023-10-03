@@ -23,13 +23,16 @@ import torch
 import torch.utils.data
 import torchvision
 from PIL import Image
-
+from pathlib import Path
+import labml
 from labml import lab, tracker, experiment, monit
 from labml.configs import BaseConfigs, option
 from labml_helpers.device import DeviceConfigs
 from labml_nn.diffusion.ddpm import DenoiseDiffusion
 from labml_nn.diffusion.ddpm.unet import UNet
 
+from dataset import ImgDataSet, MNISTDataset
+# from utils import Configs
 
 class Configs(BaseConfigs):
     """
@@ -58,16 +61,16 @@ class Configs(BaseConfigs):
     is_attention: List[int] = [False, False, False, True]
 
     # Number of time steps $T$
-    n_steps: int = 1_000
+    n_steps: int = 10
     # Batch size
     batch_size: int = 64
     # Number of samples to generate
     n_samples: int = 16
     # Learning rate
-    learning_rate: float = 2e-5
+    learning_rate: float = 5e-5
 
     # Number of training epochs
-    epochs: int = 1_000
+    epochs: int = 1
 
     # Dataset
     dataset: torch.utils.data.Dataset
@@ -109,6 +112,10 @@ class Configs(BaseConfigs):
             # $x_T \sim p(x_T) = \mathcal{N}(x_T; \mathbf{0}, \mathbf{I})$
             x = torch.randn([self.n_samples, self.image_channels, self.image_size, self.image_size],
                             device=self.device)
+            
+            print(x.size())
+            x_new = x.new_full((self.n_samples,), 100, dtype=torch.long)
+            print(x_new.size())
 
             # Remove noise for $T$ steps
             for t_ in monit.iterate('Sample', self.n_steps):
@@ -149,13 +156,14 @@ class Configs(BaseConfigs):
         """
         for _ in monit.loop(self.epochs):
             # Train the model
-            self.train()
+            # self.train()
             # Sample some images
             self.sample()
             # New line in the console
             tracker.new_line()
             # Save the model
-            experiment.save_checkpoint()
+            # experiment.save_checkpoint()
+            # experiment.save_bundle('./123.tar.gz', experiment.get_uuid())
 
 
 class CelebADataset(torch.utils.data.Dataset):
@@ -199,21 +207,21 @@ def celeb_dataset(c: Configs):
     return CelebADataset(c.image_size)
 
 
-class MNISTDataset(torchvision.datasets.MNIST):
-    """
-    ### MNIST dataset
-    """
+# class MNISTDataset(torchvision.datasets.MNIST):
+#     """
+#     ### MNIST dataset
+#     """
 
-    def __init__(self, image_size):
-        transform = torchvision.transforms.Compose([
-            torchvision.transforms.Resize(image_size),
-            torchvision.transforms.ToTensor(),
-        ])
+#     def __init__(self, image_size):
+#         transform = torchvision.transforms.Compose([
+#             torchvision.transforms.Resize(image_size),
+#             torchvision.transforms.ToTensor(),
+#         ])
 
-        super().__init__(str(lab.get_data_path()), train=True, download=True, transform=transform)
+#         super().__init__(str(lab.get_data_path()), train=True, download=True, transform=transform)
 
-    def __getitem__(self, item):
-        return super().__getitem__(item)[0]
+#     def __getitem__(self, item):
+#         return super().__getitem__(item)[0]
 
 
 @option(Configs.dataset, 'MNIST')
@@ -226,16 +234,16 @@ def mnist_dataset(c: Configs):
 
 def main():
     # Create experiment
-    experiment.create(name='diffuse', writers={'screen', 'labml'})
+    experiment.create(name='diffuse', writers={'tensorboard'})
 
     # Create configurations
     configs = Configs()
 
     # Set configurations. You can override the defaults by passing the values in the dictionary.
     experiment.configs(configs, {
-        'dataset': 'CelebA',  # 'MNIST'
-        'image_channels': 3,  # 1,
-        'epochs': 100,  # 5,
+        'dataset': 'MNIST',  # 
+        'image_channels': 1,  # 1,
+        'epochs': 3,  # 5,
     })
 
     # Initialize
@@ -243,6 +251,11 @@ def main():
 
     # Set models for saving and loading
     experiment.add_pytorch_models({'eps_model': configs.eps_model})
+    # print(experiment.get_uuid())
+
+
+    
+    # experiment.save_checkpoint()
 
     # Start and run the training loop
     with experiment.start():
