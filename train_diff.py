@@ -1,5 +1,5 @@
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import random
 
 import torch
@@ -29,13 +29,13 @@ from labml import lab, tracker, experiment, monit
 import sys
 
 # print(sys.path)
-from utils import Configs
+from func.utils import Configs
 # import utils.utils
 
 def create_parser():
     parser = argparse.ArgumentParser()
     # parser.add_argument("--config_path", default="config.yaml", nargs='?', help="path to config file")
-    parser.add_argument("--data_path", default='./Dataset/byFont', type=str, help='')
+    parser.add_argument("--data_path", default='/code/Font/val/byFont', type=str, help='')
     parser.add_argument("--font_classes", default='./cfgs/font_classes_173.json', type=str, help='')
 
     # ddp setting

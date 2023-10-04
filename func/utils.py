@@ -32,7 +32,7 @@ from labml_helpers.device import DeviceConfigs
 from labml_nn.diffusion.ddpm import DenoiseDiffusion
 from labml_nn.diffusion.ddpm.unet import UNet
 
-from dataset import ImgDataSet, MNISTDataset
+from func.dataset import ImgDataSet # , MNISTDataset
 # from . import dataset
 
 def read_spilt_data(path):
@@ -260,7 +260,7 @@ class Configs(BaseConfigs):
     # Image size
     image_size: int = 224
     # Number of channels in the initial feature map
-    n_channels: int = 64
+    n_channels: int = 32
     # The list of channel numbers at each resolution.
     # The number of channels is `channel_multipliers[i] * n_channels`
     channel_multipliers: List[int] = [1, 2, 2, 4]
@@ -268,7 +268,7 @@ class Configs(BaseConfigs):
     is_attention: List[int] = [False, False, False, True]
 
     # Number of time steps $T$
-    n_steps: int = 1000
+    n_steps: int = 10
     # Batch size
     batch_size: int = 8
     # Number of samples to generate
@@ -365,7 +365,7 @@ class Configs(BaseConfigs):
             # New line in the console
             tracker.new_line()
             # Save the model
-            # experiment.save_checkpoint()
+            experiment.save_checkpoint()
 
 
 # @option(Configs.dataset, 'MNIST')
