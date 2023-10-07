@@ -15,16 +15,20 @@ import argparse
 from typing import List
 from torch.nn.parallel import DistributedDataParallel as DDP
 from ignite.handlers import create_lr_scheduler_with_warmup
+from labml_nn.diffusion.ddpm import DenoiseDiffusion
+# from labml_nn.diffusion.ddpm.unet import UNet
 from tensorboardX import SummaryWriter
 # from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage
 from torch.cuda import amp
 from func.dataset import ImgDataSet
-from func.utils import read_spilt_data, get_loader, train_one_epoch, evaluate
+from model.UNet import UNet
+from func.utils import get_loader, train_one_epoch, load_model, evaluate
+from model.diff import Diffusion
 
 def create_parser():
     parser = argparse.ArgumentParser()
     # parser.add_argument("--config_path", default="config.yaml", nargs='?', help="path to config file")
-    parser.add_argument("--data_path", default='/code/Font/val/byFont', type=str, help='')
+    parser.add_argument("--data_path", default='/code/Font/byFont', type=str, help='')
     parser.add_argument("--json_file", default='./cfgs/font_classes_173.json', type=str, help='')
 
     # ddp setting
@@ -35,20 +39,20 @@ def create_parser():
     parser.add_argument("--lr", default=0.01, type=float, help='learning rate')
     parser.add_argument("--epoch", default=5, type=int, help='total epoch')
     parser.add_argument("--n_classes", default=173, type=int, help='total classes')
-    parser.add_argument("--n_steps", default=100, type=int, help='')
-    parser.add_argument("--n_samples", default=4, type=int, help='Number of samples to generate')
+    parser.add_argument("--n_steps", default=1000, type=int, help='')
+    parser.add_argument("--n_samples", default=1, type=int, help='Number of samples to generate, only 1 now')
     parser.add_argument("--accumulation_step", default=4, type=int, help='')
     parser.add_argument("--seed", default=8603, type=int, help='init random seed')
 
     # save and load data path
-    parser.add_argument("--model_save_path", default='./result', type=str, help='path to save model')
+    parser.add_argument("--model_save_path", default='./result/no_feature', type=str, help='path to save model')
     parser.add_argument("--save_frequency", default=3, type=int, help='save model frequency')
     parser.add_argument("--dict_path", default='', type=str, help='path to json file')
 
     # images setting
     parser.add_argument("--image_size", default=224, type=int, help='size of input image')
     parser.add_argument("--image_channels", default=3, type=int, help='RGB')
-    parser.add_argument("--n_channels", default=32, type=int, help='Number of channels in the initial feature map')
+    parser.add_argument("--n_channels", default=16, type=int, help='Number of channels in the initial feature map')
     parser.add_argument("--is_attn", default=[False, False, False, True], type=List[int], help='')
     parser.add_argument("--ch_mults", default=[1, 2, 2, 4], type=List[int], help='')
 
@@ -64,7 +68,7 @@ def create_parser():
     parser.add_argument("--lrf", default=0.0005, type=float, help='')
     parser.add_argument("--cosanneal_cycle", default=50, type=int, help='')
 
-    parser.add_argument("--batch_size", default=128, type=int, help='')
+    parser.add_argument("--batch_size", default=64, type=int, help='')
     parser.add_argument("--num_workers", default=6, type=int, help='')
 
     # parser.add_argument("", default=, type=, help='')
@@ -115,6 +119,24 @@ def train(args, ddp_gpu=-1):
     train_loader = get_loader(args) 
     print("Get data loader successfully")
 
+    # load model
+    device = torch.device('cuda', ddp_gpu)
+    model = UNet(
+        image_channels=args.image_channels,
+        n_channels=args.n_channels,
+        ch_mults=args.ch_mults,
+        is_attn=args.is_attn
+    ).to(device)
+
+    print("load model successful")
+
+    # for name, param in model.named_parameters():
+    #     if param.grad is None:
+    #         print(name)
+    
+    # print(model.requires_grad_)
+    # return 0
+
     # check if folder exist and start summarywriter on main worker
     if is_main_worker(ddp_gpu):
         print("Start Training")
@@ -143,7 +165,7 @@ def train(args, ddp_gpu=-1):
 
     # setting Distributed 
     if args.use_ddp:   
-        model = DDP(model.to(ddp_gpu))
+        model = DDP(model.to(ddp_gpu), find_unused_parameters=True)
     else:
         model = model.to(ddp_gpu)
     
@@ -155,9 +177,16 @@ def train(args, ddp_gpu=-1):
     # start training
     for epoch in range(start_epoch, args.epoch):
         
+        diffusion = DenoiseDiffusion(
+            eps_model=model,
+            n_steps=args.n_steps,
+            device=device
+        )
+
         # train 
         train_loss = train_one_epoch(
             model=model, 
+            diffusion=diffusion,
             optimizer=opt,
             data_loader=train_loader,
             device=ddp_gpu,
@@ -173,7 +202,8 @@ def train(args, ddp_gpu=-1):
             scheduler.step()
 
         # eval 
-        model.sample()
+        
+        sample = evaluate(diffusion, device, args)
 
         # eval
         # val_loss, val_acc = evaluate(
@@ -186,9 +216,10 @@ def train(args, ddp_gpu=-1):
 
         # write info into summarywriter in main worker
         if is_main_worker(ddp_gpu):
-            tags = ["train_loss", "train_acc", "val_loss", "val_acc", "lr"]
+            tags = ["train_loss", "lr", "sample"]
             tb_writer.add_scalar(tags[0], train_loss, epoch)
             tb_writer.add_scalar(tags[1], opt.param_groups[0]['lr'], epoch)
+            tb_writer.add_image('sample', sample, epoch)
             # tb_writer.add_scalar(tags[2], train_acc, epoch)
             # tb_writer.add_scalar(tags[3], val_loss, epoch)
             # tb_writer.add_scalar(tags[4], val_acc, epoch)

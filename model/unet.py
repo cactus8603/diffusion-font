@@ -224,8 +224,8 @@ class DownBlock(Module):
             self.attn = nn.Identity()
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
-        x = self.res(x, t)
-        x = self.attn(x)
+        x = self.res(x, t).contiguous()
+        x = self.attn(x).contiguous()
         return x
 
 
@@ -247,8 +247,8 @@ class UpBlock(Module):
             self.attn = nn.Identity()
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
-        x = self.res(x, t)
-        x = self.attn(x)
+        x = self.res(x, t).contiguous()
+        x = self.attn(x).contiguous()
         return x
 
 
@@ -267,9 +267,9 @@ class MiddleBlock(Module):
         self.res2 = ResidualBlock(n_channels, n_channels, time_channels)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor):
-        x = self.res1(x, t)
-        x = self.attn(x)
-        x = self.res2(x, t)
+        x = self.res1(x, t).contiguous()
+        x = self.attn(x).contiguous()
+        x = self.res2(x, t).contiguous()
         return x
 
 
@@ -390,28 +390,28 @@ class UNet(Module):
         t = self.time_emb(t)
 
         # Get image projection
-        x = self.image_proj(x)
+        x = self.image_proj(x).contiguous()
 
         # `h` will store outputs at each resolution for skip connection
         h = [x]
         # First half of U-Net
         for m in self.down:
-            x = m(x, t)
+            x = m(x, t).contiguous()
             h.append(x)
 
         # Middle (bottom)
-        x = self.middle(x, t)
+        x = self.middle(x, t).contiguous()
 
         # Second half of U-Net
         for m in self.up:
             if isinstance(m, Upsample):
-                x = m(x, t)
+                x = m(x, t).contiguous()
             else:
                 # Get the skip connection from first half of U-Net and concatenate
                 s = h.pop()
-                x = torch.cat((x, s), dim=1)
+                x = torch.cat((x, s), dim=1).contiguous()
                 #
-                x = m(x, t)
+                x = m(x, t).contiguous()
 
         # Final normalization and convolution
         return self.final(self.act(self.norm(x)))

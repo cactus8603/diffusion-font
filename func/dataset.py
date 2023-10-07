@@ -38,7 +38,7 @@ class ImgDataSet(Dataset):
         label = self.img_label[idx]
         # print(label, label)
 
-        img_tensor = self.transform(img)
+        img_tensor = self.transform(img).contiguous()
         label_tensor = torch.zeros(self.num_classes)
         font_num = int(list(self.font_class_dict.keys())[list(self.font_class_dict.values()).index(label)])
         label_tensor[font_num] = 1.

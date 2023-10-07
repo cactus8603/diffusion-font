@@ -14,11 +14,11 @@ class Diffusion(nn.Module):
         self.image_size = args.image_size
         self.n_channels = args.n_channels
         self.ch_mults = [1, 2, 2, 4]
-        self.is_attn = args.is_attention
+        self.is_attn = args.is_attn
         self.n_steps = args.n_steps
         self.device = device
 
-        self.model = UNet(
+        self.eps_model = UNet(
             image_channels=self.image_channels,
             n_channels=self.n_channels,
             ch_mults=self.ch_mults,
@@ -26,13 +26,13 @@ class Diffusion(nn.Module):
         )
 
         self.diffusion = DenoiseDiffusion(
-            model=self.model,
+            eps_model=self.eps_model,
             n_steps=self.n_steps,
             device=self.device
         )
 
         # Image logging
-        tracker.set_image("sample", True)
+        # tracker.set_image("sample", True)
 
     def forward(self, x):
         return self.diffusion.loss(x)
@@ -43,7 +43,9 @@ class Diffusion(nn.Module):
                            device=self.device)
             
             for t_ in monit.iterate('Sample', self.n_steps):
-                t = self.n_steps - t_ -1
-                x = self.diffusion.p_sample(x, x.new_full((self.n_samples,), t, dtype=torch.long))
+                print(t_)
+                # t = self.n_steps - t_ -1
+                # x = self.diffusion.p_sample(x, x.new_full((self.n_samples,), t, dtype=torch.long))
 
-            tracker.save('sample', x)
+            # tracker.save('sample', x)
+            return x
