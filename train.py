@@ -18,14 +18,14 @@ from ignite.handlers import create_lr_scheduler_with_warmup
 from tensorboardX import SummaryWriter
 # from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage
 from torch.cuda import amp
-from utils.dataset import ImgDataSet
-from utils.utils import read_spilt_data, get_loader, train_one_epoch, evaluate
+from func.dataset import ImgDataSet
+from func.utils import read_spilt_data, get_loader, train_one_epoch, evaluate
 
 def create_parser():
     parser = argparse.ArgumentParser()
     # parser.add_argument("--config_path", default="config.yaml", nargs='?', help="path to config file")
     parser.add_argument("--data_path", default='/code/Font/val/byFont', type=str, help='')
-    parser.add_argument("--font_classes", default='./cfgs/font_classes_173.json', type=str, help='')
+    parser.add_argument("--json_file", default='./cfgs/font_classes_173.json', type=str, help='')
 
     # ddp setting
     parser.add_argument("--use_ddp", default=True, type=bool, help='use ddp or not')
@@ -112,11 +112,8 @@ def train(args, ddp_gpu=-1):
     torch.cuda.set_device(ddp_gpu)
     
     # get dataLoader
-    train_loader, val_loader = get_loader(args) 
+    train_loader = get_loader(args) 
     print("Get data loader successfully")
-
-
-    # model = timm.create_model('swin_base_patch4_window7_224', pretrained=False, num_classes=args_dict['n_classes'])
 
     # check if folder exist and start summarywriter on main worker
     if is_main_worker(ddp_gpu):
@@ -147,7 +144,6 @@ def train(args, ddp_gpu=-1):
     # setting Distributed 
     if args.use_ddp:   
         model = DDP(model.to(ddp_gpu))
-        # model = DDP(model(args_dict).to(ddp_gpu))
     else:
         model = model.to(ddp_gpu)
     
@@ -160,7 +156,7 @@ def train(args, ddp_gpu=-1):
     for epoch in range(start_epoch, args.epoch):
         
         # train 
-        train_loss, train_acc = train_one_epoch(
+        train_loss = train_one_epoch(
             model=model, 
             optimizer=opt,
             data_loader=train_loader,
@@ -176,32 +172,36 @@ def train(args, ddp_gpu=-1):
         else:
             scheduler.step()
 
+        # eval 
+        model.sample()
+
         # eval
-        val_loss, val_acc = evaluate(
-            model=model, 
-            data_loader=val_loader,
-            device=ddp_gpu,
-            epoch=epoch,
-            classes=args.n_classes
-        )
+        # val_loss, val_acc = evaluate(
+        #     model=model, 
+        #     data_loader=val_loader,
+        #     device=ddp_gpu,
+        #     epoch=epoch,
+        #     classes=args.n_classes
+        # )
 
         # write info into summarywriter in main worker
         if is_main_worker(ddp_gpu):
             tags = ["train_loss", "train_acc", "val_loss", "val_acc", "lr"]
             tb_writer.add_scalar(tags[0], train_loss, epoch)
-            tb_writer.add_scalar(tags[1], train_acc, epoch)
-            tb_writer.add_scalar(tags[2], val_loss, epoch)
-            tb_writer.add_scalar(tags[3], val_acc, epoch)
-            tb_writer.add_scalar(tags[4], opt.param_groups[0]['lr'], epoch)
+            tb_writer.add_scalar(tags[1], opt.param_groups[0]['lr'], epoch)
+            # tb_writer.add_scalar(tags[2], train_acc, epoch)
+            # tb_writer.add_scalar(tags[3], val_loss, epoch)
+            # tb_writer.add_scalar(tags[4], val_acc, epoch)
+            
 
             # save model every two epoch 
             if (epoch % args.save_frequency == 0 and epoch >= 10):
-                save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, val_acc))
+                save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, train_loss))
                 torch.save(model, save_path)
-            elif (epoch >= 10 and score < val_acc):
-                save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, val_acc))
-                torch.save(model, save_path)
-                score = val_acc
+            # elif (epoch >= 10 and score < val_acc):
+            #     save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, val_acc))
+            #     torch.save(model, save_path)
+            #     score = val_acc
 
 if __name__ == '__main__':
 

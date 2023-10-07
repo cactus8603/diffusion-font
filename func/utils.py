@@ -63,7 +63,7 @@ def read_spilt_data(path):
 def get_loader(args):
     train_data, train_label = read_spilt_data(args)
 
-    train_dataset = ImgDataSet(train_data, train_label, args.n_classes, args.font_classes)
+    train_dataset = ImgDataSet(train_data, train_label, args.n_classes, args.json_file)
     
     # dist
     train_sampler = DistributedSampler(train_dataset)
@@ -296,52 +296,42 @@ def ddp_model(c: Configs):
 
 
 
-def train_one_epoch(model, optimizer, data_loader, device, epoch, scaler, args_dict):
+def train_one_epoch(model, optimizer, data_loader, device, epoch, scaler, args):
     model.train()
-    loss_function = torch.nn.CrossEntropyLoss()
+    # loss_function = torch.nn.CrossEntropyLoss()
 
     accu_loss = torch.zeros(1).to(device)
-    avg_loss = torch.zeros(1).to(device)
-    accu_num = torch.zeros(1).to(device)
+    # avg_loss = torch.zeros(1).to(device)
+    # accu_num = torch.zeros(1).to(device)
 
     optimizer.zero_grad()
 
     sample_num = 0
-    data_loader = tqdm(data_loader)
+    pbar = tqdm(data_loader)
 
     for i, (img, label) in enumerate(data_loader):
         img, label = img.to(device), label.to(device)
-        # print(img.shape)
-        # print(label.argmax(1))
-        # print(label.shape)
-        # break
+
         sample_num += img.shape[0]
 
         with autocast():
-            pred = model(img)
-            loss = loss_function(pred, label)
+            loss = model(img)
+            # loss = loss_function(pred, label)
 
         accu_loss += loss.detach()
-        loss /= args_dict['accumulation_step']
+        loss /= args.accumulation_step
         scaler.scale(loss).backward()
 
-        p = F.softmax(pred, dim=1)
-        accu_num += (p.argmax(1) == label.argmax(1)).type(torch.float).sum().item()
-
-        # pred_class = torch.max(pred, dim=1)[1]
-        # accu_num += torch.eq(pred_class, label).sum()
-
-        if (((i+1) % args_dict['accumulation_step'] == 0) or (i+1 == len(data_loader))):
+        if (((i+1) % args.accumulation_step == 0) or (i+1 == len(data_loader))):
             scaler.step(optimizer)
             scaler.update()
             # optimizer.step()
             optimizer.zero_grad()
-
-        # print(accu_loss.item(), loss.detach(), loss.item())     
-        data_loader.desc = "epoch:{},gpu:{},loss:{:.5f},acc:{:.5f}".format(epoch, device, accu_loss.item()/(i+1), accu_num.item() / sample_num)
+   
+        pbar.desc = "epoch:{},gpu:{},loss:{:.5f}".format(epoch, device, accu_loss.item()/(i+1))
         # break
 
-    return (accu_loss.item() / (i+1)), (accu_num.item() / sample_num)
+    return accu_loss.item() / (i+1)
 
 @torch.no_grad()
 def evaluate(model, data_loader):
