@@ -12,6 +12,7 @@ import torch.multiprocessing as mp
 import torch.utils.data.distributed
 import torch.optim.lr_scheduler as lr_scheduler
 import argparse
+from typing import List
 from torch.nn.parallel import DistributedDataParallel as DDP
 from ignite.handlers import create_lr_scheduler_with_warmup
 from tensorboardX import SummaryWriter
@@ -22,25 +23,34 @@ from utils.utils import read_spilt_data, get_loader, train_one_epoch, evaluate
 
 def create_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", default="config.yaml", nargs='?', help="path to config file")
-    parser.add_argument("--seed", default=8603, type=int, help='init random seed')
+    # parser.add_argument("--config_path", default="config.yaml", nargs='?', help="path to config file")
+    parser.add_argument("--data_path", default='/code/Font/val/byFont', type=str, help='')
+    parser.add_argument("--font_classes", default='./cfgs/font_classes_173.json', type=str, help='')
 
     # ddp setting
-    parser.add_argument("--use_ddp", default=False, type=bool, help='use ddp or not')
+    parser.add_argument("--use_ddp", default=True, type=bool, help='use ddp or not')
     parser.add_argument("--port", default=8888, type=int, help='ddp port')
 
     # training setting
     parser.add_argument("--lr", default=0.01, type=float, help='learning rate')
-    parser.add_argument("--epoch", default=200, type=int, help='total epoch')
+    parser.add_argument("--epoch", default=5, type=int, help='total epoch')
     parser.add_argument("--n_classes", default=173, type=int, help='total classes')
     parser.add_argument("--n_steps", default=100, type=int, help='')
-    parser.add_argument("--n_samples", default=16, type=, help='Number of samples to generate')
+    parser.add_argument("--n_samples", default=4, type=int, help='Number of samples to generate')
     parser.add_argument("--accumulation_step", default=4, type=int, help='')
+    parser.add_argument("--seed", default=8603, type=int, help='init random seed')
 
     # save and load data path
     parser.add_argument("--model_save_path", default='./result', type=str, help='path to save model')
     parser.add_argument("--save_frequency", default=3, type=int, help='save model frequency')
     parser.add_argument("--dict_path", default='', type=str, help='path to json file')
+
+    # images setting
+    parser.add_argument("--image_size", default=224, type=int, help='size of input image')
+    parser.add_argument("--image_channels", default=3, type=int, help='RGB')
+    parser.add_argument("--n_channels", default=32, type=int, help='Number of channels in the initial feature map')
+    parser.add_argument("--is_attn", default=[False, False, False, True], type=List[int], help='')
+    parser.add_argument("--ch_mults", default=[1, 2, 2, 4], type=List[int], help='')
 
     # warmup
     parser.add_argument("--warmup", default=False, type=bool, help='use warmup or not')

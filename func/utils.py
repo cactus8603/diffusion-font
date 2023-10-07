@@ -3,8 +3,8 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from glob import glob
-# from torch.utils.data.distributed import DistributedSampler
-# from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel
 # import torch.distributed as dist
 # import timm
 # import pathlib
@@ -27,9 +27,11 @@ from torch.cuda import amp
 
 from typing import List
 from labml import lab, tracker, experiment, monit
+from labml_helpers.seed import SeedConfigs
 from labml.configs import BaseConfigs, option
 from labml_helpers.device import DeviceConfigs
 from labml_nn.diffusion.ddpm import DenoiseDiffusion
+from labml_helpers.train_valid import BatchIndex
 from labml_nn.diffusion.ddpm.unet import UNet
 
 from func.dataset import ImgDataSet # , MNISTDataset
@@ -59,22 +61,22 @@ def read_spilt_data(path):
 
 
 def get_loader(args):
-    val_data, val_label = read_spilt_data(args)
+    train_data, train_label = read_spilt_data(args)
 
-    val_dataset = ImgDataSet(val_data, val_label, args.n_classes, args.font_classes)
+    train_dataset = ImgDataSet(train_data, train_label, args.n_classes, args.font_classes)
     
     # dist
-    # val_sampler = DistributedSampler(val_dataset)
+    train_sampler = DistributedSampler(train_dataset)
     
-    val_loader = DataLoader(
-        val_dataset,
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=args.batch_size,
         pin_memory=True,
         num_workers=args.num_workers,
-        # sampler=val_sampler # dist
+        sampler=train_sampler # dist
     )
 
-    return val_loader
+    return train_loader
 
 def load_model(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,155 +93,6 @@ def load_model(args):
 
     return model
 
-# class Configs(BaseConfigs):
-
-#     #  picks up an available CUDA device or defaults to CPU.
-#     device: torch.device = DeviceConfigs()
-
-#     # U-Net model for $\textcolor{lightgreen}{\epsilon_\theta}(x_t, t)$
-#     eps_model: UNet
-#     # [DDPM algorithm](index.html)
-#     diffusion: DenoiseDiffusion
-
-#     # Number of channels in the image. $3$ for RGB.
-#     image_channels: int = 3
-#     # Image size
-#     image_size: int = 32
-#     # Number of channels in the initial feature map
-#     n_channels: int = 64
-#     # The list of channel numbers at each resolution.
-#     # The number of channels is `channel_multipliers[i] * n_channels`
-#     channel_multipliers: List[int] = [1, 2, 2, 4]
-#     # The list of booleans that indicate whether to use attention at each resolution
-#     is_attention: List[int] = [False, False, False, True]
-
-#     # Number of time steps $T$
-#     n_steps: int = 1_000
-#     # Batch size
-#     batch_size: int = 64
-#     # Number of samples to generate
-#     n_samples: int = 16
-#     # Learning rate
-#     learning_rate: float = 2e-5
-
-#     # Number of training epochs
-#     epochs: int = 1_000
-
-#     # Dataset
-#     dataset: torch.utils.data.Dataset
-
-#     # Dataloader
-#     data_loader: torch.utils.data.DataLoader
-
-#     # Adam optimizer
-#     optimizer: torch.optim.Adam
-
-#     # scaler
-#     scaler: amp.GradScaler()
-
-
-#     def __init__(self):
-#         # self.image_channels = 3
-#         # self.img_size = 32
-#         # self.n_channels = 64
-#         # self.channels_multipliers = [1, 2, 2, 4]
-#         # self.is_attention = [False, False, False, True]
-#         # self.n_steps = args.n_steps
-#         # self.batch_size = args.batch_size
-#         # self.n_samples = 16
-#         # self.accumulation_step = args.accumulation_step
-#         # self.lr = args.lr
-#         # self.epochs = args.epoch
-#         # self.dataset = dataset
-#         # self.data_loader = get_loader(args)
-#         # self.scaler = amp.GradScaler()
-
-#         # Create $\textcolor{lightgreen}{\epsilon_\theta}(x_t, t)$ model
-#         self.eps_model = UNet(
-#             image_channels=self.image_channels,
-#             n_channels=self.n_channels,
-#             ch_mults=self.channel_multipliers,
-#             is_attn=self.is_attention,
-#         ).to(self.device)
-
-#         # Create [DDPM class](index.html)
-#         self.diffusion = DenoiseDiffusion(
-#             eps_model=self.eps_model,
-#             n_steps=self.n_steps,
-#             device=self.device,
-#         )
-
-#         # Create dataloader
-#         self.data_loader = torch.utils.data.DataLoader(self.dataset, self.batch_size, shuffle=True, pin_memory=True)
-#         # Create optimizer
-#         self.optimizer = torch.optim.Adam(self.eps_model.parameters(), lr=self.learning_rate)
-
-#         # Image logging
-#         tracker.set_image("sample", True)
-
-#     def sample(self):
-#         with torch.no_grad():
-#             # $x_T \sim p(x_T) = \mathcal{N}(x_T; \mathbf{0}, \mathbf{I})$
-#             x = torch.rand([self.n_samples, self.image_channels, self.image_size, self.image_size],
-#                            device=self.device)
-            
-#             for t_ in monit.iterate('Sample', self.n_steps):
-#                 # $t$
-#                 t = self.n_steps - t_ - 1
-#                 # Sample from $\textcolor{lightgreen}{p_\theta}(x_{t-1}|x_t)$
-#                 x = self.diffusion.p_sample(x, x.new_full((self.n_samples,), t, dtype=torch.long))
-
-#             tracker.save('sample', x)
-
-#     def train(self):
-#         # Iterate through the dataset
-
-#         pbar = tqdm(self.data_loader)
-#         idx = 0
-
-#         for data in monit.iterate('Train', self.data_loader):
-#             # Increment global step
-#             tracker.add_global_step()
-#             # Move data to device
-#             data = data.to(self.device)
-
-#             # Make the gradients zero
-#             self.optimizer.zero_grad()
-#             # Calculate loss
-#             loss = self.diffusion.loss(data)
-#             # Compute gradients
-#             loss.backward()
-#             # Take an optimization step
-#             self.optimizer.step()
-#             # Track the loss
-#             tracker.save('loss', loss)
-
-#             with autocast():
-#                 # Calculate loss
-#                 loss = self.diffusion.loss(data)
-
-#             self.scaler.scale(loss).backward()
-
-#             if (((idx+1) % self.accumulation_step == 0) or (idx+1 == len(self.data_loader))):
-#                 self.scaler.step(self.optimizer)
-#                 self.scaler.update()
-#                 # optimizer.step()
-#                 self.optimizer.zero_grad()
-            
-#             pbar.desc = "loss:{:.5f}".format(loss.item())
-
-#     # def style_encoder(self): # feature map siez [batch, 176, 7, 7]
-
-#     def run(self):
-#         for _ in monit.loop(self.epochs):
-#             # Train the model
-#             self.train()
-#             # Sample some images
-#             self.sample()
-#             # New line in the console
-#             tracker.new_line()
-#             # Save the model
-#             experiment.save_checkpoint()
 
 class Configs(BaseConfigs):
     """
@@ -250,8 +103,10 @@ class Configs(BaseConfigs):
     #  picks up an available CUDA device or defaults to CPU.
     device: torch.device = DeviceConfigs()
 
+    set_seed = SeedConfigs()
+
     # U-Net model for $\textcolor{lightgreen}{\epsilon_\theta}(x_t, t)$
-    eps_model: UNet
+    model: UNet
     # [DDPM algorithm](index.html)
     diffusion: DenoiseDiffusion
 
@@ -281,15 +136,18 @@ class Configs(BaseConfigs):
 
     # Dataset
     dataset: torch.utils.data.Dataset
+    # Sampler
+    sampler: torch.utils.data.distributed.DistributedSampler
     # Dataloader
     data_loader: torch.utils.data.DataLoader
 
     # Adam optimizer
     optimizer: torch.optim.Adam
 
+
     def init(self):
         # Create $\textcolor{lightgreen}{\epsilon_\theta}(x_t, t)$ model
-        self.eps_model = UNet(
+        self.model = UNet(
             image_channels=self.image_channels,
             n_channels=self.n_channels,
             ch_mults=self.channel_multipliers,
@@ -298,15 +156,22 @@ class Configs(BaseConfigs):
 
         # Create [DDPM class](index.html)
         self.diffusion = DenoiseDiffusion(
-            eps_model=self.eps_model,
+            model=self.model,
             n_steps=self.n_steps,
             device=self.device,
         )
 
         # Create dataloader
-        self.data_loader = torch.utils.data.DataLoader(self.dataset, self.batch_size, shuffle=True, pin_memory=True)
+        self.sampler = DistributedSampler(self.dataset, shuffle=True)
+        self.data_loader = torch.utils.data.DataLoader(
+            self.dataset, 
+            self.batch_size, 
+            shuffle=True, 
+            pin_memory=True,
+            sampler=self.sampler
+        )
         # Create optimizer
-        self.optimizer = torch.optim.Adam(self.eps_model.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
         # Image logging
         tracker.set_image("sample", True)
@@ -334,14 +199,29 @@ class Configs(BaseConfigs):
         """
         ### Train
         """
-
+        # print(type(self.data_loader))
         # Iterate through the dataset
-        for (data, label) in monit.iterate('Train', self.data_loader):
+        # for (data, label) in monit.iterate('Train', self.data_loader):
             # Increment global step
-            tracker.add_global_step()
+            # tracker.add_global_step()
+            # # Move data to device
+            # data = data.to(self.device)
+
+            # # Make the gradients zero
+            # self.optimizer.zero_grad()
+            # # Calculate loss
+            # loss = self.diffusion.loss(data)
+            # # Compute gradients
+            # loss.backward()
+            # # Take an optimization step
+            # self.optimizer.step()
+            # # Track the loss
+            # tracker.save('loss', loss)
+
+        for batch_idx, (data, label) in monit.enum("Train", self.data_loader):
+            
             # Move data to device
             data = data.to(self.device)
-
             # Make the gradients zero
             self.optimizer.zero_grad()
             # Calculate loss
@@ -350,8 +230,28 @@ class Configs(BaseConfigs):
             loss.backward()
             # Take an optimization step
             self.optimizer.step()
+            # Increment global step
+            tracker.add_global_step(data.shape[0])
             # Track the loss
             tracker.save('loss', loss)
+
+
+    def step(self, batch: any, batch_idx: BatchIndex):
+        data, label = batch[0].to(self.device), batch[1].to(self.device)
+
+        tracker.add_global_step(len(data))
+
+        # Make the gradients zero
+        self.optimizer.zero_grad()
+        # Calculate loss
+        loss = self.diffusion.loss(data)
+        # Compute gradients
+        loss.backward()
+        # Take an optimization step
+        self.optimizer.step()
+        # Track the loss
+        tracker.save('loss', loss)
+
 
     def run(self):
         """
@@ -360,12 +260,15 @@ class Configs(BaseConfigs):
         for _ in monit.loop(self.epochs):
             # Train the model
             self.train()
+            # self.step()
             # Sample some images
             self.sample()
             # New line in the console
             tracker.new_line()
             # Save the model
             experiment.save_checkpoint()
+
+
 
 
 # @option(Configs.dataset, 'MNIST')
@@ -386,6 +289,10 @@ def Img_dataset(c: Configs):
     train_data, train_label = read_spilt_data(args.data_path)
 
     return ImgDataSet(train_data, train_label, args.n_classes, args.font_classes)
+
+@option(Configs.model)
+def ddp_model(c: Configs):
+    return DistributedDataParallel(UNet().to(c.device), device_ids=[c.device])
 
 
 

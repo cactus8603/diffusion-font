@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5"
 import random
 
 import torch
@@ -7,8 +7,8 @@ import torch
 import numpy as np
 # import timm
 # import torch.backends.cudnn as cudnn
-# import torch.distributed as dist
-# import torch.multiprocessing as mp
+import torch.distributed as dist
+import torch.multiprocessing as mp
 # import torch.utils.data.distributed
 # import torch.optim.lr_scheduler as lr_scheduler
 import argparse
@@ -39,7 +39,7 @@ def create_parser():
     parser.add_argument("--font_classes", default='./cfgs/font_classes_173.json', type=str, help='')
 
     # ddp setting
-    parser.add_argument("--use_ddp", default=False, type=bool, help='use ddp or not')
+    parser.add_argument("--use_ddp", default=True, type=bool, help='use ddp or not')
     parser.add_argument("--port", default=8888, type=int, help='ddp port')
 
     # training setting
@@ -95,61 +95,96 @@ def is_main_worker(gpu):
     return (gpu <= 0)
 
 # mp.spawn will pass the value "gpu" as rank
-def train_ddp(rank, world_size, args):
+def train_ddp(local_rank, rank, world_size, uuid):
+    print("local:{}, rank:{}, world_size:{}, uuid:{}".format(local_rank, rank, world_size, uuid))
+
+    torch.cuda.set_device(rank)
+
+    args = create_parser()
 
     port = args.port
-    dist.init_process_group(
-        backend='nccl',
-        init_method="tcp://127.0.0.1:" + str(port),
-        world_size=world_size,
-        rank=rank,
-    )
+    with monit.section('Distributed'):
+        dist.init_process_group(
+            backend='nccl',
+            init_method="tcp://127.0.0.1:" + str(port),
+            world_size=world_size,
+            rank=rank,
+        )
 
-    train(args, ddp_gpu=rank)
-    cleanup()
-
-# train function
-def train():
-
-    # Create experiment
-    experiment.create(name='diffuse', writers={'tensorboard'})
-
-    # Create configurations
-    configs = Configs()
+    conf = Configs()
+    experiment.create(uuid=uuid, name='ddp')
+    experiment.distributed(local_rank, world_size)
 
     # Set configurations. You can override the defaults by passing the values in the dictionary.
-    experiment.configs(configs, {
+    experiment.configs(conf, {
         'dataset': 'ImgDataset', # 'MNIST',  # 'ImgDataset'
         'image_channels': 3,  # 1,
         'epochs': 200,  # 5,
+        'model': 'ddp_model',
+        'device.cuda_device': local_rank
     })
 
-    # Initialize
-    configs.init()
+    conf.set_seed.set()
 
     # Set models for saving and loading
-    experiment.add_pytorch_models({'eps_model': configs.eps_model})
+    # experiment.add_pytorch_models({'model': conf.model})
+    experiment.add_pytorch_models(dict(model=conf.model))
 
-    # Start and run the training loop
     with experiment.start():
-        configs.run()
+        conf.run()
+
+    # experiment.configs(conf,
+    #                    {'optimizer.optimizer': 'Adam',
+    #                     'optimizer.learning_rate': 1e-4,
+    #                     'model': 'ddp_model',
+    #                     'device.cuda_device': local_rank})
+    
+
+    # experiment.distributed(rank=rank, world_size=world_size)
+
+    cleanup()
+
+# train function
+# def train(args):
+
+#     # Create configurations
+#     configs = Configs()
+
+#     # Set configurations. You can override the defaults by passing the values in the dictionary.
+#     experiment.configs(configs, {
+#         'dataset': 'ImgDataset', # 'MNIST',  # 'ImgDataset'
+#         'image_channels': 3,  # 1,
+#         'epochs': 200,  # 5,
+#     })
+
+#     # Initialize
+#     configs.init()
+
+#     # Set models for saving and loading
+#     experiment.add_pytorch_models({'eps_model': configs.eps_model})
+
+#     # Start and run the training loop
+#     with experiment.start():
+#         configs.run()
+
+def spawned(rank, world_size, uuid):
+    train_ddp(rank, rank, world_size, uuid)
+    
 
 if __name__ == '__main__':
 
     # get args
-    # args = create_parser()
-
-    # init random seed
-    # init(args.seed)
-
+    args = create_parser()
+    
     # train in ddp or not
-    # if args.use_ddp:
-    #     n_gpus_per_node = torch.cuda.device_count()
-    #     world_size = n_gpus_per_node
-    #     mp.spawn(train_ddp, nprocs=n_gpus_per_node, args=(world_size, args))
+    if args.use_ddp:
+        n_gpus_per_node = torch.cuda.device_count()
+        world_size = n_gpus_per_node
+        # mp.spawn(train_ddp, nprocs=n_gpus_per_node, args=(world_size, args))
+        mp.spawn(spawned, args=(world_size, experiment.generate_uuid()), nprocs=world_size, join=True)
     # else:
     #     train()
 
-    train()
+    # train()
 
     
