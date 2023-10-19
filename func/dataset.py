@@ -26,9 +26,10 @@ class ImgDataSet(Dataset):
         self.num_classes = n_classes
         self.font_class_dict = json.load(open(dict_path))
 
+
         self.transform = Compose([
             ToPILImage(),
-            Resize((224, 224)), 
+            Resize((128, 128)), 
             ToTensor(),
             Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ])

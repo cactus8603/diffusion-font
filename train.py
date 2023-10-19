@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import random
 
 import torch
@@ -7,28 +7,40 @@ import math
 import numpy as np
 import timm
 import torch.backends.cudnn as cudnn
+import torchvision
+import torchvision.datasets as datasets
+from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data import DataLoader
+from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.utils.data.distributed
 import torch.optim.lr_scheduler as lr_scheduler
 import argparse
 from typing import List
+from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from ignite.handlers import create_lr_scheduler_with_warmup
-from labml_nn.diffusion.ddpm import DenoiseDiffusion
+# from labml_nn.diffusion.ddpm import DenoiseDiffusion
 # from labml_nn.diffusion.ddpm.unet import UNet
 from tensorboardX import SummaryWriter
 # from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage
 from torch.cuda import amp
-from func.dataset import ImgDataSet
-from model.UNet import UNet
+# from func.dataset import ImgDataSet
+# from model.UNet import UNet
+# from model.diffusion import DenoiseDiffusion
 from func.utils import get_loader, train_one_epoch, load_model, evaluate
-from model.diff import Diffusion
+# from model.diff import Diffusion
+from model.diff_ai import CustomModel
+from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer, Unet1D, GaussianDiffusion1D
+
+
 
 def create_parser():
     parser = argparse.ArgumentParser()
     # parser.add_argument("--config_path", default="config.yaml", nargs='?', help="path to config file")
     parser.add_argument("--data_path", default='/code/Font/byFont', type=str, help='')
+    parser.add_argument("--sample_set", default='./sample', type=str, help='')
     parser.add_argument("--json_file", default='./cfgs/font_classes_173.json', type=str, help='')
 
     # ddp setting
@@ -36,30 +48,34 @@ def create_parser():
     parser.add_argument("--port", default=8888, type=int, help='ddp port')
 
     # training setting
-    parser.add_argument("--lr", default=0.01, type=float, help='learning rate')
-    parser.add_argument("--epoch", default=5, type=int, help='total epoch')
+    parser.add_argument("--lr", default=5e-6, type=float, help='learning rate')
+    parser.add_argument("--epoch", default=2000, type=int, help='total epoch')
     parser.add_argument("--n_classes", default=173, type=int, help='total classes')
-    parser.add_argument("--n_steps", default=1000, type=int, help='')
+    parser.add_argument("--n_steps", default=1200, type=int, help='')
     parser.add_argument("--n_samples", default=1, type=int, help='Number of samples to generate, only 1 now')
     parser.add_argument("--accumulation_step", default=4, type=int, help='')
     parser.add_argument("--seed", default=8603, type=int, help='init random seed')
 
     # save and load data path
-    parser.add_argument("--model_save_path", default='./result/no_feature', type=str, help='path to save model')
-    parser.add_argument("--save_frequency", default=3, type=int, help='save model frequency')
-    parser.add_argument("--dict_path", default='', type=str, help='path to json file')
+    parser.add_argument("--model_save_path", default='./result/test_eval', type=str, help='path to save model')
+    parser.add_argument("--save_frequency", default=5, type=int, help='save model frequency')
+    parser.add_argument("--sample_freq", default=2, type=int, help='')
+    parser.add_argument("--style_enc", default='./cfgs/style.pt', type=str, help='path to style encoder')
 
     # images setting
-    parser.add_argument("--image_size", default=224, type=int, help='size of input image')
+    parser.add_argument("--image_size", default=128, type=int, help='size of input image')
     parser.add_argument("--image_channels", default=3, type=int, help='RGB')
-    parser.add_argument("--n_channels", default=16, type=int, help='Number of channels in the initial feature map')
-    parser.add_argument("--is_attn", default=[False, False, False, True], type=List[int], help='')
-    parser.add_argument("--ch_mults", default=[1, 2, 2, 4], type=List[int], help='')
+    
+    
+    # parser.add_argument("--n_channels", default=8, type=int, help='Number of channels in the initial feature map')
+    # parser.add_argument("--patch_size", default=4, type=int, help='')
+    # parser.add_argument("--is_attn", default=[False, False, False, True], type=List[int], help='')
+    # parser.add_argument("--ch_mults", default=[1, 2, 2, 4], type=List[int], help='')
 
     # warmup
     parser.add_argument("--warmup", default=False, type=bool, help='use warmup or not')
-    parser.add_argument("--warmup_start_value", default=0.001, type=float, help='')
-    parser.add_argument("--warmup_step", default=5, type=int, help='warmup steps')
+    parser.add_argument("--warmup_start_value", default=5e-10, type=float, help='')
+    parser.add_argument("--warmup_step", default=3, type=int, help='warmup steps')
 
     ### parameter setting ###
     # optim and lr scheduler
@@ -68,14 +84,21 @@ def create_parser():
     parser.add_argument("--lrf", default=0.0005, type=float, help='')
     parser.add_argument("--cosanneal_cycle", default=50, type=int, help='')
 
-    parser.add_argument("--batch_size", default=64, type=int, help='')
+    parser.add_argument("--batch_size", default=80, type=int, help='')
     parser.add_argument("--num_workers", default=6, type=int, help='')
+
+    # model setting
+    # parser.add_argument("--dropout_prob", default=0.1, type=float, help='')
+    # parser.add_argument("--max_positional_encoding", default=10000, type=int, help='')
+    # parser.add_argument("--num_heads", default=3, type=int, help='')
 
     # parser.add_argument("", default=, type=, help='')
     
     args = parser.parse_args()
     return args
 
+def is_main_worker(gpu):
+    return (gpu <= 0)
 
 # set seed
 def init(seed):
@@ -91,8 +114,7 @@ def init(seed):
 def cleanup():
     dist.destroy_process_group()
 
-def is_main_worker(gpu):
-    return (gpu <= 0)
+
 
 # mp.spawn will pass the value "gpu" as rank
 def train_ddp(rank, world_size, args):
@@ -121,21 +143,34 @@ def train(args, ddp_gpu=-1):
 
     # load model
     device = torch.device('cuda', ddp_gpu)
-    model = UNet(
-        image_channels=args.image_channels,
-        n_channels=args.n_channels,
-        ch_mults=args.ch_mults,
-        is_attn=args.is_attn
-    ).to(device)
 
+
+    # style_extracter = torch.load(args.style_enc, map_location=device)
+    # style_extracter = timm.create_model('efficientformerv2_s0', features_only=True, pretrained=True).to(device)
+    style_extracter = 0
+    # print("Load style encoder and model successfully")
+
+
+    # diffusion model
+    model = Unet(
+        dim = 32,
+        # self_condition = True,
+        # learned_sinusoidal_cond = True,
+        # random_fourier_features = True,
+        dim_mults = (1, 2, 4, 8),
+        flash_attn = True,
+    )
+
+    model = torch.load('/code/diffusion-font/result/train_v2_adamW/model_85_0.003_.pth', map_location=device)
+    diffusion = GaussianDiffusion(
+        model,
+        image_size = args.image_size,
+        timesteps = args.n_steps,    # number of steps
+        # sampling_timesteps = 250
+        # objective = 'pred_x0'
+    ).to(device)
     print("load model successful")
 
-    # for name, param in model.named_parameters():
-    #     if param.grad is None:
-    #         print(name)
-    
-    # print(model.requires_grad_)
-    # return 0
 
     # check if folder exist and start summarywriter on main worker
     if is_main_worker(ddp_gpu):
@@ -169,70 +204,57 @@ def train(args, ddp_gpu=-1):
     else:
         model = model.to(ddp_gpu)
     
-    score = 0
+    # score = 0
     
     # setting Automatic mixed precision
     scaler = amp.GradScaler()
 
     # start training
     for epoch in range(start_epoch, args.epoch):
-        
-        diffusion = DenoiseDiffusion(
-            eps_model=model,
-            n_steps=args.n_steps,
-            device=device
-        )
 
         # train 
-        train_loss = train_one_epoch(
-            model=model, 
-            diffusion=diffusion,
-            optimizer=opt,
-            data_loader=train_loader,
-            device=ddp_gpu,
-            epoch=epoch,
-            scaler=scaler,
-            args=args
-        )
+        # train_loss = train_one_epoch(
+        #     model=diffusion, 
+        #     style_extracter=style_extracter,
+        #     optimizer=opt,
+        #     data_loader=train_loader,
+        #     device=ddp_gpu,
+        #     epoch=epoch,
+        #     scaler=scaler,
+        #     args=args
+        # )
 
-        # update scheduler 
+        # # update scheduler 
         if args.warmup:
             warmup(None)
         else:
             scheduler.step()
 
-        # eval 
-        
-        sample = evaluate(diffusion, device, args)
-
         # eval
-        # val_loss, val_acc = evaluate(
-        #     model=model, 
-        #     data_loader=val_loader,
-        #     device=ddp_gpu,
-        #     epoch=epoch,
-        #     classes=args.n_classes
-        # )
+        evaluate(
+            model=model,
+            diffusion=diffusion, 
+            # data_loader=test_loader,
+            device=ddp_gpu,
+            epoch=epoch,
+            # classes=args.n_classes,
+            args=args, 
+        )
+
+        break
 
         # write info into summarywriter in main worker
         if is_main_worker(ddp_gpu):
-            tags = ["train_loss", "lr", "sample"]
+            tags = ["train_loss", "lr", "sample_0", "sample_1", "sample_2", "sample_3"]
             tb_writer.add_scalar(tags[0], train_loss, epoch)
             tb_writer.add_scalar(tags[1], opt.param_groups[0]['lr'], epoch)
-            tb_writer.add_image('sample', sample, epoch)
-            # tb_writer.add_scalar(tags[2], train_acc, epoch)
-            # tb_writer.add_scalar(tags[3], val_loss, epoch)
-            # tb_writer.add_scalar(tags[4], val_acc, epoch)
-            
+
 
             # save model every two epoch 
             if (epoch % args.save_frequency == 0 and epoch >= 10):
                 save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, train_loss))
-                torch.save(model, save_path)
-            # elif (epoch >= 10 and score < val_acc):
-            #     save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, val_acc))
-            #     torch.save(model, save_path)
-            #     score = val_acc
+                torch.save(model.module, save_path)
+
 
 if __name__ == '__main__':
 
