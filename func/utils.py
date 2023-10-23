@@ -16,7 +16,11 @@ from inspect import isfunction
 import torchvision.transforms as T
 from PIL import Image  
 # from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+<<<<<<< HEAD
 from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize, Grayscale
+=======
+from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize
+>>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
 
 from typing import List
 from labml import lab, tracker, experiment, monit
@@ -157,10 +161,16 @@ def evaluate(model, diffusion, epoch, device, args):
 
     transform = Compose([
         ToPILImage(),
+<<<<<<< HEAD
         Resize((128, 128)), 
         Grayscale(num_output_channels = 1),
         ToTensor(),
         Normalize([0.5], [0.1]),
+=======
+        Resize((args.image_size, args.image_size)), 
+        ToTensor(),
+        Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+>>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
     ])
 
     x = []
@@ -180,6 +190,7 @@ def evaluate(model, diffusion, epoch, device, args):
         t = torch.randint(0, args.n_steps, (b,), device=device).long().to(device)
         noise = None
         noise = default(noise, lambda: torch.randn_like(x)).to(device)
+<<<<<<< HEAD
         x_noisy = diffusion.q_sample(x_start=x, t=t, noise=noise)
         # # print(x_noisy.shape, t.shape)
 
@@ -189,6 +200,18 @@ def evaluate(model, diffusion, epoch, device, args):
         x_recon = diffusion.unnormalize(x_recon)
         x_recon = (1 - x_recon)
 
+=======
+        # x_noisy = diffusion.q_sample(x_start=x, t=t, noise=noise)
+        # # print(x_noisy.shape, t.shape)
+
+        # x_recon = model.module.forward(x_noisy, t)
+        # # print(x_recon)
+        # x_recon = diffusion.unnormalize(x_recon)
+        # x_recon = (1 - x_recon)
+
+        x_recon = diffusion.p_sample_loop((b, 3, args.image_size, args.image_size), return_all_timesteps = False)
+        grid = torchvision.utils.make_grid(x_recon, nrow=4)
+>>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
         grid = torchvision.utils.make_grid(x_recon, nrow=4)
         if device == torch.device('cuda', 0):
             torchvision.utils.save_image(grid, os.path.join(args.model_save_path, 'recon_{}.png'.format(epoch)))
