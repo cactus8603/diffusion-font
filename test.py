@@ -1,6 +1,8 @@
-from pathlib import Path
-s = f"123.pth"
-path = Path('./123')
-string = str(path / s)
+import torch
 
-print(string)
+img = torch.rand(8,3,224,224)
+print(img)
+
+# print(img[0].shape)
+# for i in range(4):
+#     print(i)

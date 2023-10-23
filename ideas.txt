@@ -1,0 +1,1 @@
+cosine schedule (add noise with cosine)

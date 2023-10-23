@@ -1,29 +1,22 @@
 import os
+import cv2
+
 import torch
 import torch.nn.functional as F
+import torchvision
 from tqdm import tqdm
 from glob import glob
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
-# import torch.distributed as dist
-# import timm
-# import pathlib
-# import torchvision
 
-# from timm.models.efficientformer_v2 import _cfg, efficientformerv2_s0
-
-import os
-# import random
-import torch
-# import numpy as np
-import torch.nn.functional as F
-from tqdm import tqdm
-from glob import glob
 from torch.utils.data import DataLoader
-# from torch.utils.data.distributed import DistributedSampler
 from torch.cuda.amp import autocast as autocast
 from torch.cuda import amp
+from inspect import isfunction
+import torchvision.transforms as T
+from PIL import Image  
 # from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize, Grayscale
 
 from typing import List
 from labml import lab, tracker, experiment, monit
@@ -36,6 +29,8 @@ from labml_nn.diffusion.ddpm.unet import UNet
 
 from func.dataset import ImgDataSet # , MNISTDataset
 # from . import dataset
+
+
 
 def read_spilt_data(path):
 
@@ -61,7 +56,7 @@ def read_spilt_data(path):
 
 
 def get_loader(args):
-    train_data, train_label = read_spilt_data(args)
+    train_data, train_label = read_spilt_data(args.data_path)
 
     train_dataset = ImgDataSet(train_data, train_label, args.n_classes, args.json_file)
     
@@ -78,247 +73,63 @@ def get_loader(args):
 
     return train_loader
 
-def load_model(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def load_model(device, args):
+    
+    model = UNet(
+        image_channels=args.image_channels,
+        n_channels=args.n_channels,
+        ch_mults=args.ch_mults,
+        is_attn=args.is_attn
+    ).to(device)
 
-    # dist.init_process_group(
-    #     backend='nccl',
-    #     init_method="tcp://127.0.0.1:" + str(args.port),
-    #     world_size=1,
-    #     rank=0,
-    # )
-
-    model = torch.load(args.model_path, map_location=device)  
     print("load model successful")
 
     return model
 
+def exists(x):
+    return x is not None
 
-class Configs(BaseConfigs):
-    """
-    ## Configurations
-    """
-    # Device to train the model on.
-    # [`DeviceConfigs`](https://docs.labml.ai/api/helpers.html#labml_helpers.device.DeviceConfigs)
-    #  picks up an available CUDA device or defaults to CPU.
-    device: torch.device = DeviceConfigs()
+def default(val, d):
+    if exists(val):
+        return val
+    return d() if isfunction(d) else d
 
-    set_seed = SeedConfigs()
-
-    # U-Net model for $\textcolor{lightgreen}{\epsilon_\theta}(x_t, t)$
-    model: UNet
-    # [DDPM algorithm](index.html)
-    diffusion: DenoiseDiffusion
-
-    # Number of channels in the image. $3$ for RGB.
-    image_channels: int = 3
-    # Image size
-    image_size: int = 224
-    # Number of channels in the initial feature map
-    n_channels: int = 32
-    # The list of channel numbers at each resolution.
-    # The number of channels is `channel_multipliers[i] * n_channels`
-    channel_multipliers: List[int] = [1, 2, 2, 4]
-    # The list of booleans that indicate whether to use attention at each resolution
-    is_attention: List[int] = [False, False, False, True]
-
-    # Number of time steps $T$
-    n_steps: int = 10
-    # Batch size
-    batch_size: int = 8
-    # Number of samples to generate
-    n_samples: int = 4
-    # Learning rate
-    learning_rate: float = 2e-4
-
-    # Number of training epochs
-    epochs: int = 200
-
-    # Dataset
-    dataset: torch.utils.data.Dataset
-    # Sampler
-    sampler: torch.utils.data.distributed.DistributedSampler
-    # Dataloader
-    data_loader: torch.utils.data.DataLoader
-
-    # Adam optimizer
-    optimizer: torch.optim.Adam
-
-
-    def init(self):
-        # Create $\textcolor{lightgreen}{\epsilon_\theta}(x_t, t)$ model
-        self.model = UNet(
-            image_channels=self.image_channels,
-            n_channels=self.n_channels,
-            ch_mults=self.channel_multipliers,
-            is_attn=self.is_attention,
-        ).to(self.device)
-
-        # Create [DDPM class](index.html)
-        self.diffusion = DenoiseDiffusion(
-            model=self.model,
-            n_steps=self.n_steps,
-            device=self.device,
-        )
-
-        # Create dataloader
-        self.sampler = DistributedSampler(self.dataset, shuffle=True)
-        self.data_loader = torch.utils.data.DataLoader(
-            self.dataset, 
-            self.batch_size, 
-            shuffle=True, 
-            pin_memory=True,
-            sampler=self.sampler
-        )
-        # Create optimizer
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-
-        # Image logging
-        tracker.set_image("sample", True)
-
-    def sample(self):
-        """
-        ### Sample images
-        """
-        with torch.no_grad():
-            # $x_T \sim p(x_T) = \mathcal{N}(x_T; \mathbf{0}, \mathbf{I})$
-            x = torch.randn([self.n_samples, self.image_channels, self.image_size, self.image_size],
-                            device=self.device)
-
-            # Remove noise for $T$ steps
-            for t_ in monit.iterate('Sample', self.n_steps):
-                # $t$
-                t = self.n_steps - t_ - 1
-                # Sample from $\textcolor{lightgreen}{p_\theta}(x_{t-1}|x_t)$
-                x = self.diffusion.p_sample(x, x.new_full((self.n_samples,), t, dtype=torch.long))
-
-            # Log samples
-            tracker.save('sample', x)
-
-    def train(self):
-        """
-        ### Train
-        """
-        # print(type(self.data_loader))
-        # Iterate through the dataset
-        # for (data, label) in monit.iterate('Train', self.data_loader):
-            # Increment global step
-            # tracker.add_global_step()
-            # # Move data to device
-            # data = data.to(self.device)
-
-            # # Make the gradients zero
-            # self.optimizer.zero_grad()
-            # # Calculate loss
-            # loss = self.diffusion.loss(data)
-            # # Compute gradients
-            # loss.backward()
-            # # Take an optimization step
-            # self.optimizer.step()
-            # # Track the loss
-            # tracker.save('loss', loss)
-
-        for batch_idx, (data, label) in monit.enum("Train", self.data_loader):
-            
-            # Move data to device
-            data = data.to(self.device)
-            # Make the gradients zero
-            self.optimizer.zero_grad()
-            # Calculate loss
-            loss = self.diffusion.loss(data)
-            # Compute gradients
-            loss.backward()
-            # Take an optimization step
-            self.optimizer.step()
-            # Increment global step
-            tracker.add_global_step(data.shape[0])
-            # Track the loss
-            tracker.save('loss', loss)
-
-
-    def step(self, batch: any, batch_idx: BatchIndex):
-        data, label = batch[0].to(self.device), batch[1].to(self.device)
-
-        tracker.add_global_step(len(data))
-
-        # Make the gradients zero
-        self.optimizer.zero_grad()
-        # Calculate loss
-        loss = self.diffusion.loss(data)
-        # Compute gradients
-        loss.backward()
-        # Take an optimization step
-        self.optimizer.step()
-        # Track the loss
-        tracker.save('loss', loss)
-
-
-    def run(self):
-        """
-        ### Training loop
-        """
-        for _ in monit.loop(self.epochs):
-            # Train the model
-            self.train()
-            # self.step()
-            # Sample some images
-            self.sample()
-            # New line in the console
-            tracker.new_line()
-            # Save the model
-            experiment.save_checkpoint()
-
-
-
-
-# @option(Configs.dataset, 'MNIST')
-# def mnist_dataset(c: Configs):
-#     """
-#     Create MNIST dataset
-#     """
-#     return MNISTDataset(c.image_size)
-
-
-@option(Configs.dataset, 'ImgDataset')
-def Img_dataset(c: Configs):
-    """
-    Create CelebA dataset
-    """
-    from train_diff import create_parser
-    args = create_parser()
-    train_data, train_label = read_spilt_data(args.data_path)
-
-    return ImgDataSet(train_data, train_label, args.n_classes, args.font_classes)
-
-@option(Configs.model)
-def ddp_model(c: Configs):
-    return DistributedDataParallel(UNet().to(c.device), device_ids=[c.device])
-
-
-
-def train_one_epoch(model, optimizer, data_loader, device, epoch, scaler, args):
+def train_one_epoch(model, style_extracter, optimizer, data_loader, device, epoch, scaler, args):
     model.train()
     # loss_function = torch.nn.CrossEntropyLoss()
+    loss_function = torch.nn.MSELoss()
 
-    accu_loss = torch.zeros(1).to(device)
+    # accu_loss = torch.zeros(1).to(device)
     # avg_loss = torch.zeros(1).to(device)
     # accu_num = torch.zeros(1).to(device)
 
     optimizer.zero_grad()
 
-    sample_num = 0
+    # sample_num = 0
     pbar = tqdm(data_loader)
 
     for i, (img, label) in enumerate(data_loader):
         img, label = img.to(device), label.to(device)
+        # feature_map = style_extracter.forward_features(img).to(device)
+        # feature map
+        # 1.(batch, 32, 56, 56)
+        # 2.(batch, 48, 28, 28)
+        # 3.(batch, 96, 14, 14)
+        # 4.(batch, 176, 7, 7)
 
-        sample_num += img.shape[0]
+        # feature_map = style_extracter(img)
+        # for _ in feature_map:
+        #     print(_.shape)
+        # break
+        # sample_num += img.shape[0]
+
 
         with autocast():
+            # loss = diffusion.loss(img)
+            # generate_img = model(img, feature_map)
             loss = model(img)
-            # loss = loss_function(pred, label)
 
-        accu_loss += loss.detach()
+        # accu_loss += loss.detach()
         loss /= args.accumulation_step
         scaler.scale(loss).backward()
 
@@ -328,35 +139,67 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, scaler, args):
             # optimizer.step()
             optimizer.zero_grad()
    
-        pbar.desc = "epoch:{},gpu:{},loss:{:.5f}".format(epoch, device, accu_loss.item()/(i+1))
+        pbar.desc = "epoch:{},gpu:{},loss:{:.5f}".format(epoch, device, loss.item())
+        pbar.update(1)
         # break
 
-    return accu_loss.item() / (i+1)
+    return loss.item()
+
 
 @torch.no_grad()
-def evaluate(model, data_loader):
+def evaluate(model, diffusion, epoch, device, args):
+
     model.eval()
-    loss_function = torch.nn.CrossEntropyLoss()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    accu_loss = torch.zeros(1).to(device)
-    accu_num = torch.zeros(1).to(device)
-
-    sample_num = 0
-    data_loader = tqdm(data_loader)
-
-    for i, (img, label) in enumerate(data_loader):
-        img, label = img.to(device), label.to(device)
-        sample_num += img.shape[0]
-
-        pred = model(img)
-        
-        p = F.softmax(pred, dim=1)
-        accu_num += (p.argmax(1) == label.argmax(1)).type(torch.float).sum().item()
-
-        loss = loss_function(pred, label)
-        accu_loss += loss
-        
-        data_loader.desc = "loss:{:.5f}, acc:{:.5f}".format(accu_loss.item()/(i+1), accu_num.item() / sample_num)
+    #  = torch.load(args.style_enc, map_location=device)
     
-    return accu_num.item() / sample_num
+    # feature_map = style_extracter.forward_features(img_tensor)
+
+    transform = Compose([
+        ToPILImage(),
+        Resize((128, 128)), 
+        Grayscale(num_output_channels = 1),
+        ToTensor(),
+        Normalize([0.5], [0.1]),
+    ])
+
+    x = []
+    sample_set = glob(os.path.join(args.sample_set, '*.png'))
+    # print(sample_set)
+    for sample in sample_set:
+        img = cv2.imread(sample)
+        img_tensor = transform(img).contiguous().to(device)
+        x.append(img_tensor)
+
+    x = torch.stack(x)
+
+    # print(x)
+
+    with torch.no_grad():
+        b, c, h, w, device, img_size, = *x.shape, x.device, args.image_size
+        t = torch.randint(0, args.n_steps, (b,), device=device).long().to(device)
+        noise = None
+        noise = default(noise, lambda: torch.randn_like(x)).to(device)
+        x_noisy = diffusion.q_sample(x_start=x, t=t, noise=noise)
+        # # print(x_noisy.shape, t.shape)
+
+        # x_recon = model.module.forward(x_noisy, t)
+        x_recon = model.forward(x_noisy, t)
+        # # print(x_recon)
+        x_recon = diffusion.unnormalize(x_recon)
+        x_recon = (1 - x_recon)
+
+        grid = torchvision.utils.make_grid(x_recon, nrow=4)
+        if device == torch.device('cuda', 0):
+            torchvision.utils.save_image(grid, os.path.join(args.model_save_path, 'recon_{}.png'.format(epoch)))
+            print('save grid sample at epoch {}'.format(epoch))
+
+
+
+
+
+
+        
+        
+
+        

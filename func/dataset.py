@@ -3,7 +3,7 @@ import cv2
 import json
 import torchvision
 from torch.utils.data import Dataset
-from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize
+from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize, Grayscale
 from labml import lab, tracker, experiment, monit
 # from labml.configs import BaseConfigs, option
 # from labml_helpers.device import DeviceConfigs
@@ -26,11 +26,13 @@ class ImgDataSet(Dataset):
         self.num_classes = n_classes
         self.font_class_dict = json.load(open(dict_path))
 
+
         self.transform = Compose([
             ToPILImage(),
-            Resize((224, 224)), 
+            Resize((128, 128)), 
+            Grayscale(num_output_channels = 1),
             ToTensor(),
-            Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+            Normalize([0.5], [0.1]),
         ])
 
     def __getitem__(self, idx):
@@ -38,7 +40,7 @@ class ImgDataSet(Dataset):
         label = self.img_label[idx]
         # print(label, label)
 
-        img_tensor = self.transform(img)
+        img_tensor = self.transform(img).contiguous()
         label_tensor = torch.zeros(self.num_classes)
         font_num = int(list(self.font_class_dict.keys())[list(self.font_class_dict.values()).index(label)])
         label_tensor[font_num] = 1.
