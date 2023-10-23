@@ -1,5 +1,5 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5"
 import random
 
 import torch
@@ -57,11 +57,7 @@ def create_parser():
     parser.add_argument("--seed", default=8603, type=int, help='init random seed')
 
     # save and load data path
-<<<<<<< HEAD
     parser.add_argument("--model_save_path", default='./result/1_chs', type=str, help='path to save model')
-=======
-    parser.add_argument("--model_save_path", default='./result/test_eval', type=str, help='path to save model')
->>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
     parser.add_argument("--save_frequency", default=5, type=int, help='save model frequency')
     parser.add_argument("--sample_freq", default=2, type=int, help='')
     parser.add_argument("--style_enc", default='./cfgs/style.pt', type=str, help='path to style encoder')
@@ -88,11 +84,7 @@ def create_parser():
     parser.add_argument("--lrf", default=0.0005, type=float, help='')
     parser.add_argument("--cosanneal_cycle", default=50, type=int, help='')
 
-<<<<<<< HEAD
     parser.add_argument("--batch_size", default=48, type=int, help='')
-=======
-    parser.add_argument("--batch_size", default=80, type=int, help='')
->>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
     parser.add_argument("--num_workers", default=6, type=int, help='')
 
     # model setting
@@ -160,7 +152,6 @@ def train(args, ddp_gpu=-1):
 
 
     # diffusion model
-<<<<<<< HEAD
     # model = Unet(
     #     dim = 32,
     #     # self_condition = True,
@@ -191,24 +182,6 @@ def train(args, ddp_gpu=-1):
         image_size = args.image_size,
         timesteps = args.n_steps,   # number of steps
         # sampling_timesteps = 10
-=======
-    model = Unet(
-        dim = 32,
-        # self_condition = True,
-        # learned_sinusoidal_cond = True,
-        # random_fourier_features = True,
-        dim_mults = (1, 2, 4, 8),
-        flash_attn = True,
-    )
-
-    model = torch.load('/code/diffusion-font/result/train_v2_adamW/model_85_0.003_.pth', map_location=device)
-    diffusion = GaussianDiffusion(
-        model,
-        image_size = args.image_size,
-        timesteps = args.n_steps,    # number of steps
-        # sampling_timesteps = 250
-        # objective = 'pred_x0'
->>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
     ).to(device)
     print("load model successful")
 
@@ -252,7 +225,6 @@ def train(args, ddp_gpu=-1):
 
     # start training
     for epoch in range(start_epoch, args.epoch):
-<<<<<<< HEAD
 
         # train 
         train_loss = train_one_epoch(
@@ -266,21 +238,6 @@ def train(args, ddp_gpu=-1):
             args=args
         )
 
-=======
-
-        # train 
-        # train_loss = train_one_epoch(
-        #     model=diffusion, 
-        #     style_extracter=style_extracter,
-        #     optimizer=opt,
-        #     data_loader=train_loader,
-        #     device=ddp_gpu,
-        #     epoch=epoch,
-        #     scaler=scaler,
-        #     args=args
-        # )
-
->>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
         # # update scheduler 
         if args.warmup:
             warmup(None)
@@ -298,11 +255,7 @@ def train(args, ddp_gpu=-1):
             args=args, 
         )
 
-<<<<<<< HEAD
         # break
-=======
-        break
->>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
 
         # write info into summarywriter in main worker
         if is_main_worker(ddp_gpu):

@@ -30,10 +30,7 @@ class ImgDataSet(Dataset):
         self.transform = Compose([
             ToPILImage(),
             Resize((128, 128)), 
-<<<<<<< HEAD
             Grayscale(num_output_channels = 1),
-=======
->>>>>>> 586a2fbf356d6981355ca31ac0bebcd8df82ae33
             ToTensor(),
             Normalize([0.5], [0.1]),
         ])
