@@ -1,0 +1,9 @@
+mse_loss, content_loss, style_loss
+        O,            x,         x,         normal
+        O,            x,         O,         normal
+        O,            O,         x,         normal
+        O,            O,         O,         normal
+        X,            O,         O,         abnormal(black)
+        O*0,001,      O,         O,         normal
+
+2. tv loss (Total Variation Loss)

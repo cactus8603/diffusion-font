@@ -11,7 +11,7 @@ import torchvision
 import torchvision.datasets as datasets
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
-from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize
+# from torchvision.transforms import Compose, Resize, ToTensor, ToPILImage, Normalize
 import torch.distributed as dist
 import torch.multiprocessing as mp
 import torch.utils.data.distributed
@@ -29,19 +29,21 @@ from torch.cuda import amp
 # from func.dataset import ImgDataSet
 # from model.UNet import UNet
 # from model.diffusion import DenoiseDiffusion
-from func.utils import get_loader, train_one_epoch, load_model, evaluate
+from func.utils import get_loader, get_style_loader, train_one_epoch, evaluate, style_evaluate
 # from model.diff import Diffusion
-from model.diff_ai import CustomModel
-from denoising_diffusion_pytorch import Unet, GaussianDiffusion, Trainer, Unet1D, GaussianDiffusion1D
+# from model.diff_ai import CustomModel
+# from denoising_diffusion_pytorch import Unet, GaussianDiffusion # Trainer, Unet1D, GaussianDiffusion1D
+from model.denoising_diffusion import Unet, GaussianDiffusion
 
 
 
 def create_parser():
     parser = argparse.ArgumentParser()
     # parser.add_argument("--config_path", default="config.yaml", nargs='?', help="path to config file")
-    parser.add_argument("--data_path", default='/code/Font/byFont', type=str, help='')
-    parser.add_argument("--sample_set", default='./sample', type=str, help='')
-    parser.add_argument("--json_file", default='./cfgs/font_classes_173.json', type=str, help='')
+    parser.add_argument("--data_path", default='/code/Font/fonts_50/val_byFont', type=str, help='') # /code/Font/fonts_50/val_byFont # /code/Font/fonts_50/byFont
+    # parser.add_argument("--style_dir", default='/code/Font/fonts_50/byFont', type=str, help='')
+    parser.add_argument("--sample_set", default='./sample/test_style', type=str, help='')
+    parser.add_argument("--json_file", default='./cfgs/font_classes_50.json', type=str, help='')
 
     # ddp setting
     parser.add_argument("--use_ddp", default=True, type=bool, help='use ddp or not')
@@ -53,17 +55,19 @@ def create_parser():
     parser.add_argument("--n_classes", default=173, type=int, help='total classes')
     parser.add_argument("--n_steps", default=1200, type=int, help='')
     parser.add_argument("--n_samples", default=1, type=int, help='Number of samples to generate, only 1 now')
-    parser.add_argument("--accumulation_step", default=4, type=int, help='')
+    parser.add_argument("--accumulation_step", default=8, type=int, help='')
     parser.add_argument("--seed", default=8603, type=int, help='init random seed')
 
     # save and load data path
-    parser.add_argument("--model_save_path", default='./result/1_chs', type=str, help='path to save model')
+    parser.add_argument("--model_save_path", default='./result/test_style_content', type=str, help='path to save model')
     parser.add_argument("--save_frequency", default=5, type=int, help='save model frequency')
-    parser.add_argument("--sample_freq", default=2, type=int, help='')
-    parser.add_argument("--style_enc", default='./cfgs/style.pt', type=str, help='path to style encoder')
+    parser.add_argument("--sample_freq", default=1, type=int, help='')
+    parser.add_argument("--pretrained_model", default='./cfgs/pretrain_diff.pth', type=str, help='path to pretrained Unet')
+    parser.add_argument("--style_enc", default='./cfgs/style_1chan.pth', type=str, help='path to style encoder')
+    parser.add_argument("--content_enc", default='./cfgs/content_1chan.pth', type=str, help='path to content encoder')
 
     # images setting
-    parser.add_argument("--image_size", default=128, type=int, help='size of input image')
+    parser.add_argument("--image_size", default=224, type=int, help='size of input image')
     parser.add_argument("--image_channels", default=3, type=int, help='RGB')
     
     
@@ -84,7 +88,7 @@ def create_parser():
     parser.add_argument("--lrf", default=0.0005, type=float, help='')
     parser.add_argument("--cosanneal_cycle", default=50, type=int, help='')
 
-    parser.add_argument("--batch_size", default=48, type=int, help='')
+    parser.add_argument("--batch_size", default=8, type=int, help='')
     parser.add_argument("--num_workers", default=6, type=int, help='')
 
     # model setting
@@ -138,17 +142,21 @@ def train(args, ddp_gpu=-1):
     torch.cuda.set_device(ddp_gpu)
     
     # get dataLoader
-    train_loader = get_loader(args) 
+    # train_loader = get_loader(args) 
+
+    # get dataloader for style transfer training
+    train_loader = get_style_loader(args)
     print("Get data loader successfully")
 
     # load model
     device = torch.device('cuda', ddp_gpu)
 
 
-    # style_extracter = torch.load(args.style_enc, map_location=device)
-    # style_extracter = timm.create_model('efficientformerv2_s0', features_only=True, pretrained=True).to(device)
-    style_extracter = 0
-    # print("Load style encoder and model successfully")
+    style_encoder = torch.load(args.style_enc, map_location=device)
+    content_encoder = torch.load(args.content_enc, map_location=device)
+    # style_encoder = timm.create_model('efficientformerv2_s0', features_only=True, pretrained=True, in_chans=1).to(device)
+    # style_encoder = 0
+    print("Load style, content encoder and model successfully")
 
 
     # diffusion model
@@ -172,15 +180,17 @@ def train(args, ddp_gpu=-1):
 
     # for 1 channels
     model = Unet(
-        dim = 64,
+        dim = 48,
         dim_mults = (1, 2, 4, 8),
         channels = 1
     )
+    model = torch.load(args.pretrained_model, map_location=device)
 
     diffusion = GaussianDiffusion(
         model,
         image_size = args.image_size,
         timesteps = args.n_steps,   # number of steps
+        objective = 'pred_x0' # 'pred_noise' #
         # sampling_timesteps = 10
     ).to(device)
     print("load model successful")
@@ -227,11 +237,13 @@ def train(args, ddp_gpu=-1):
     for epoch in range(start_epoch, args.epoch):
 
         # train 
-        train_loss = train_one_epoch(
+        diff_loss, style_loss, content_loss, train_loss = train_one_epoch(
             model=diffusion, 
-            style_extracter=style_extracter,
+            style_encoder=style_encoder,
+            content_encoder=content_encoder,
             optimizer=opt,
             data_loader=train_loader,
+            # style_loader=train_style_loader,
             device=ddp_gpu,
             epoch=epoch,
             scaler=scaler,
@@ -245,27 +257,32 @@ def train(args, ddp_gpu=-1):
             scheduler.step()
 
         # eval
-        evaluate(
-            model=model,
-            diffusion=diffusion, 
-            # data_loader=test_loader,
-            device=ddp_gpu,
-            epoch=epoch,
-            # classes=args.n_classes,
-            args=args, 
-        )
+        if (epoch % args.sample_freq == 0):
+            style_evaluate(
+                model=model,
+                diffusion=diffusion, 
+                style_encoder=style_encoder,
+                # data_loader=test_loader,
+                device=ddp_gpu,
+                epoch=epoch,
+                # classes=args.n_classes,
+                args=args, 
+            )
 
         # break
 
         # write info into summarywriter in main worker
         if is_main_worker(ddp_gpu):
-            tags = ["train_loss", "lr", "sample_0", "sample_1", "sample_2", "sample_3"]
-            tb_writer.add_scalar(tags[0], train_loss, epoch)
-            tb_writer.add_scalar(tags[1], opt.param_groups[0]['lr'], epoch)
+            # tags = ["train_loss", "lr", "sample_0", "sample_1", "sample_2", "sample_3"]
+            tb_writer.add_scalar("content_loss", diff_loss, epoch)
+            tb_writer.add_scalar("style_loss", style_loss, epoch)
+            tb_writer.add_scalar("content_loss", content_loss, epoch)
+            tb_writer.add_scalar("train_loss", train_loss, epoch)
+            tb_writer.add_scalar("lr", opt.param_groups[0]['lr'], epoch)
 
 
             # save model every two epoch 
-            if (epoch % args.save_frequency == 0 and epoch >= 10):
+            if (epoch % args.save_frequency == 0 and epoch >= 5):
                 save_path = os.path.join(args.model_save_path, "model_{}_{:.3f}_.pth".format(epoch, train_loss))
                 torch.save(model.module, save_path)
 
